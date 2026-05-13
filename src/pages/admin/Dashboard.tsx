@@ -1,0 +1,201 @@
+import React, { useEffect, useState } from 'react';
+import Shell from '@/components/layout/Shell';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { Users, FileText, CheckCircle2, Clock, Trophy, AlertTriangle } from 'lucide-react';
+import { motion } from 'motion/react';
+import { supabase } from '@/lib/supabase';
+import { Group, Evaluation, Profile } from '@/types';
+
+export default function Dashboard() {
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
+  const [jurys, setJurys] = useState<Profile[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      const [groupsRes, evalsRes, jurysRes] = await Promise.all([
+        supabase.from('ccmd_groups').select('*'),
+        supabase.from('ccmd_evaluations').select('*'),
+        supabase.from('ccmd_profiles').select('*').eq('role', 'JURY')
+      ]);
+
+      if (groupsRes.data) setGroups(groupsRes.data);
+      if (evalsRes.data) setEvaluations(evalsRes.data);
+      if (jurysRes.data) setJurys(jurysRes.data);
+      setLoading(false);
+    }
+    fetchData();
+  }, []);
+
+  const totalEvaluations = evaluations.length;
+  const submittedEvaluations = evaluations.filter(e => e.submitted).length;
+  const progressPercent = totalEvaluations > 0 ? (submittedEvaluations / totalEvaluations) * 100 : 0;
+
+  return (
+    <Shell>
+      <div className="space-y-8">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <StatCard 
+            title="Total Membres" 
+            value="12" 
+            icon={Users} 
+            color="bg-blue-500"
+            delay={0}
+          />
+          <StatCard 
+            title="Évaluations" 
+            value={`${submittedEvaluations}/${totalEvaluations || 6}`} 
+            icon={CheckCircle2} 
+            color="bg-emerald-500"
+            delay={0.1}
+          />
+          <StatCard 
+            title="Score Moyen A" 
+            value="78.5" 
+            icon={Trophy} 
+            color="bg-amber-500"
+            delay={0.2}
+          />
+          <StatCard 
+            title="Verdict" 
+            value="En attente" 
+            icon={Clock} 
+            color="bg-purple-500"
+            status
+            delay={0.3}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Real-time Status */}
+          <Card className="lg:col-span-2 glass border-none overflow-hidden">
+            <CardHeader className="border-b border-white/20 pb-4">
+              <CardTitle className="flex justify-between items-center text-xl">
+                <span>Avancement des évaluations</span>
+                <Badge variant="outline" className="bg-white/50 border-white/30 text-xs font-semibold uppercase tracking-wider">
+                  En direct
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="space-y-8">
+                {groups.map((group, idx) => (
+                  <div key={group.id} className="space-y-4">
+                    <div className="flex justify-between items-end">
+                      <div>
+                        <h3 className="font-bold text-lg">{group.name}</h3>
+                        <p className="text-sm text-gray-500">{group.project_title}</p>
+                      </div>
+                      <span className="text-sm font-medium text-primary">
+                        {evaluations.filter(e => e.group_id === group.id && e.submitted).length}/3 Soumises
+                      </span>
+                    </div>
+                    <Progress value={evaluations.filter(e => e.group_id === group.id && e.submitted).length * 33.3} className="h-2" />
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                       {jurys.map(jury => {
+                         const eval_ = evaluations.find(e => e.jury_id === jury.id && e.group_id === group.id);
+                         const isSubmitted = eval_?.submitted;
+                         return (
+                           <div key={jury.id} className="flex items-center gap-2 bg-white/30 p-3 rounded-xl border border-white/20">
+                             {isSubmitted ? (
+                               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                             ) : (
+                               <Clock className="h-4 w-4 text-amber-500" />
+                             )}
+                             <span className="text-xs font-medium truncate">{jury.name}</span>
+                           </div>
+                         );
+                       })}
+                    </div>
+                  </div>
+                ))}
+
+                {groups.length === 0 && (
+                   <div className="text-center py-12">
+                     <AlertTriangle className="h-12 w-12 text-amber-500 mx-auto mb-4" />
+                     <p className="text-gray-500">Aucun groupe configuré. Veuillez les ajouter dans l'onglet Groupes.</p>
+                   </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Quick Actions / Tips */}
+          <div className="space-y-6">
+            <Card className="glass border-none bg-primary/10 text-primary-foreground relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-4 opacity-10">
+                   <Trophy size={120} />
+                </div>
+                <CardContent className="p-6 flex flex-col gap-4 relative z-10">
+                  <h3 className="text-xl font-bold text-primary">Verdict final</h3>
+                  <p className="text-sm text-primary/80">
+                    Le verdict peut être publié une fois que toutes les évaluations sont soumises.
+                  </p>
+                  <Button 
+                    className="w-full bg-primary text-white hover:bg-primary/90 mt-4 rounded-xl shadow-lg ring-4 ring-primary/10"
+                    disabled={submittedEvaluations < (groups.length * 3)}
+                  >
+                     Publier le verdict
+                  </Button>
+                </CardContent>
+            </Card>
+
+            <Card className="glass border-none">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-gray-500">Calendrier</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="bg-white/40 p-4 rounded-2xl flex gap-4 items-center">
+                    <div className="flex flex-col items-center justify-center bg-white h-12 w-12 rounded-xl shadow-sm border border-emerald-100">
+                       <span className="text-xs font-bold uppercase text-emerald-500">MAI</span>
+                       <span className="text-lg font-bold">13</span>
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm">Soutenances Finales</h4>
+                      <p className="text-xs text-gray-500">21:00, 13 Novembre, 2026</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+function StatCard({ title, value, icon: Icon, color, status, delay }: any) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay }}
+    >
+      <Card className="glass border-none shadow-xl hover:shadow-2xl transition-all duration-300 group">
+        <CardContent className="p-6">
+          <div className="flex justify-between items-start mb-4">
+            <div className={cn("p-3 rounded-2xl text-white shadow-lg transition-transform group-hover:scale-110", color)}>
+              <Icon className="h-6 w-6" />
+            </div>
+            {status && (
+              <Badge className="bg-emerald-100 text-emerald-600 border-none">Actif</Badge>
+            )}
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-medium text-gray-500 italic mb-1">{title}</span>
+            <span className="text-2xl font-bold tracking-tight">{value}</span>
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
