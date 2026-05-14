@@ -5,36 +5,125 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Users, FileText, CheckCircle2, Clock, Trophy, AlertTriangle } from 'lucide-react';
+import { Users, FileText, CheckCircle2, Clock, Trophy, AlertTriangle, RotateCcw } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '@/lib/supabase';
 import { Group, Evaluation, Profile } from '@/types';
+import { toast } from 'sonner';
 
 export default function Dashboard() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [jurys, setJurys] = useState<Profile[]>([]);
+  const [membersCount, setMembersCount] = useState(0);
+  const [verdict, setVerdict] = useState<any>(null);
+  const [memberPoints, setMemberPoints] = useState<any[]>([]);
+  const [isResetting, setIsResetting] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function fetchData() {
-      const [groupsRes, evalsRes, jurysRes] = await Promise.all([
-        supabase.from('ccmd_groups').select('*'),
-        supabase.from('ccmd_evaluations').select('*'),
-        supabase.from('ccmd_profiles').select('*').eq('role', 'JURY')
-      ]);
+  const fetchData = async () => {
+    const [groupsRes, evalsRes, jurysRes, membersRes, verdictRes, memberPointsRes] = await Promise.all([
+      supabase.from('ccmd_groups').select('*').order('name'),
+      supabase.from('ccmd_evaluations').select('*'),
+      supabase.from('ccmd_profiles').select('*').in('role', ['JURY', 'ADMIN']),
+      supabase.from('ccmd_members').select('id', { count: 'exact' }),
+      supabase.from('ccmd_final_verdict').select('*').maybeSingle(),
+      supabase.from('ccmd_member_points').select('*')
+    ]);
 
-      if (groupsRes.data) setGroups(groupsRes.data);
-      if (evalsRes.data) setEvaluations(evalsRes.data);
-      if (jurysRes.data) setJurys(jurysRes.data);
-      setLoading(false);
-    }
+    if (groupsRes.data) setGroups(groupsRes.data);
+    if (evalsRes.data) setEvaluations(evalsRes.data);
+    if (jurysRes.data) setJurys(jurysRes.data);
+    if (membersRes.count !== null) setMembersCount(membersRes.count);
+    if (verdictRes.data) setVerdict(verdictRes.data);
+    if (memberPointsRes.data) setMemberPoints(memberPointsRes.data);
+    setLoading(false);
+  };
+
+  useEffect(() => {
     fetchData();
   }, []);
 
-  const totalEvaluations = evaluations.length;
+  const handleResetEvaluations = async () => {
+    if (!confirm('ATTENTION : Voulez-vous vraiment supprimer TOUTES les évaluations et réinitialiser le processus ? Cette action est irréversible.')) return;
+
+    setIsResetting(true);
+    try {
+      // Deleting all evaluations will cascade delete criterion scores and member points
+      const { error: evalError } = await supabase.from('ccmd_evaluations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (evalError) throw evalError;
+
+      // Delete the final verdict
+      const { error: verdictError } = await supabase.from('ccmd_final_verdict').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (verdictError) throw verdictError;
+
+      toast.success('Toutes les évaluations ont été réinitialisées.');
+      await fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur lors de la réinitialisation');
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const handlePublishVerdict = async () => {
+    setIsPublishing(true);
+    try {
+      const dataToSave = verdict ? { id: verdict.id, status: 'PUBLISHED' } : { status: 'PUBLISHED' };
+      const { error } = await supabase.from('ccmd_final_verdict').upsert(dataToSave);
+      if (error) throw error;
+      toast.success('Verdict publié ! Les résultats sont désormais publics dans la section Présentation.');
+      await fetchData();
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur lors de la publication');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const expectedEvaluations = groups.length * jurys.length;
   const submittedEvaluations = evaluations.filter(e => e.submitted).length;
-  const progressPercent = totalEvaluations > 0 ? (submittedEvaluations / totalEvaluations) * 100 : 0;
+  const progressPercent = expectedEvaluations > 0 ? (submittedEvaluations / expectedEvaluations) * 100 : 0;
+
+  // Calculate scores per group using the same logic as Leaderboard
+  const groupScores = groups.map(group => {
+    let totalBase = 0;
+    let totalBonus = 0;
+
+    jurys.forEach(jury => {
+      const evaluation = evaluations.find(e => e.group_id === group.id && e.jury_id === jury.id);
+      if (!evaluation) return;
+
+      const bonus = memberPoints
+        .filter(mp => mp.evaluation_id === evaluation.id)
+        .reduce((sum, mp) => sum + (mp.points || 0), 0);
+      
+      const total = evaluation.total_score || 0;
+      const base = total - bonus;
+
+      totalBase += base;
+      totalBonus += bonus;
+    });
+
+    return {
+      group,
+      finalScore: totalBase + totalBonus
+    };
+  });
+
+  const rankedGroups = [...groupScores].sort((a, b) => b.finalScore - a.finalScore);
+  const winner = rankedGroups.length > 0 ? rankedGroups[0] : null;
+
+  let topScoreTitle = "Score Actuel";
+  let topScoreValue = "0";
+
+  if (winner) {
+    topScoreTitle = `Score ${winner.group.name.substring(0, 15)}`;
+    topScoreValue = winner.finalScore.toFixed(1);
+  }
+
+  const verdictStatusText = verdict?.status === 'PUBLISHED' ? 'Publié' : 'En attente';
 
   return (
     <Shell>
@@ -43,28 +132,28 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard 
             title="Total Membres" 
-            value="12" 
+            value={membersCount.toString()} 
             icon={Users} 
             color="bg-blue-500"
             delay={0}
           />
           <StatCard 
             title="Évaluations" 
-            value={`${submittedEvaluations}/${totalEvaluations || 6}`} 
+            value={`${submittedEvaluations}/${expectedEvaluations || 0}`} 
             icon={CheckCircle2} 
             color="bg-emerald-500"
             delay={0.1}
           />
           <StatCard 
-            title="Score Moyen A" 
-            value="78.5" 
+            title={topScoreTitle} 
+            value={topScoreValue} 
             icon={Trophy} 
             color="bg-amber-500"
             delay={0.2}
           />
           <StatCard 
             title="Verdict" 
-            value="En attente" 
+            value={verdictStatusText} 
             icon={Clock} 
             color="bg-purple-500"
             status
@@ -93,10 +182,10 @@ export default function Dashboard() {
                         <p className="text-sm text-gray-500">{group.project_title}</p>
                       </div>
                       <span className="text-sm font-medium text-primary">
-                        {evaluations.filter(e => e.group_id === group.id && e.submitted).length}/3 Soumises
+                        {evaluations.filter(e => e.group_id === group.id && e.submitted).length}/{jurys.length} Soumises
                       </span>
                     </div>
-                    <Progress value={evaluations.filter(e => e.group_id === group.id && e.submitted).length * 33.3} className="h-2" />
+                    <Progress value={jurys.length > 0 ? (evaluations.filter(e => e.group_id === group.id && e.submitted).length / jurys.length) * 100 : 0} className="h-2" />
                     
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
                        {jurys.map(jury => {
@@ -140,9 +229,10 @@ export default function Dashboard() {
                   </p>
                   <Button 
                     className="w-full bg-primary text-white hover:bg-primary/90 mt-4 rounded-xl shadow-lg ring-4 ring-primary/10"
-                    disabled={submittedEvaluations < (groups.length * 3)}
+                    disabled={expectedEvaluations === 0 || submittedEvaluations < expectedEvaluations || isPublishing || verdictStatusText === 'Publié'}
+                    onClick={handlePublishVerdict}
                   >
-                     Publier le verdict
+                     {isPublishing ? 'Publication...' : verdictStatusText === 'Publié' ? 'Déjà publié' : 'Publier le verdict'}
                   </Button>
                 </CardContent>
             </Card>
@@ -153,17 +243,35 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div className="bg-white/40 p-4 rounded-2xl flex gap-4 items-center">
-                    <div className="flex flex-col items-center justify-center bg-white h-12 w-12 rounded-xl shadow-sm border border-emerald-100">
-                       <span className="text-xs font-bold uppercase text-emerald-500">MAI</span>
-                       <span className="text-lg font-bold">13</span>
+                  <div className="bg-[#27272a] p-4 rounded-2xl flex gap-4 items-center border border-white/5 shadow-md">
+                    <div className="flex flex-col items-center justify-center bg-[#fafafa] h-12 w-12 rounded-xl shadow-sm">
+                       <span className="text-[10px] font-black uppercase text-emerald-600 tracking-widest pt-1">MAI</span>
+                       <span className="text-lg font-black text-[#09090b] leading-tight">13</span>
                     </div>
                     <div>
-                      <h4 className="font-bold text-sm">Soutenances Finales</h4>
-                      <p className="text-xs text-gray-500">21:00, 13 Novembre, 2026</p>
+                      <h4 className="font-bold text-sm text-[#fafafa]">Soutenances Finales</h4>
+                      <p className="text-xs text-[#a1a1aa] font-medium">21:00, 13 Novembre, 2026</p>
                     </div>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="glass border-red-500/20 bg-red-500/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-red-500">Zone de Danger</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Button 
+                  onClick={handleResetEvaluations}
+                  disabled={isResetting || evaluations.length === 0}
+                  variant="destructive" 
+                  className="w-full rounded-xl font-bold bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/20 transition-all"
+                >
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  {isResetting ? 'Réinitialisation...' : 'Remettre à zéro'}
+                </Button>
+                <p className="text-[10px] text-red-400/70 text-center mt-3 uppercase tracking-widest">Efface tous les scores</p>
               </CardContent>
             </Card>
           </div>

@@ -2,7 +2,10 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
+import WebSocket from "ws";
 import dotenv from "dotenv";
+
+Object.assign(global, { WebSocket });
 
 dotenv.config();
 
@@ -59,6 +62,31 @@ app.post("/api/admin/publish-verdict", async (req, res) => {
   // Logic to calculate scores and publish verdict would go here
   // Using service role to bypass RLS and lock evaluations
   res.json({ success: true, message: "Verdict publication initiated" });
+});
+
+// Create new Jury (Admin Only)
+app.post("/api/admin/jurys", async (req, res) => {
+  if (!supabaseAdmin) return res.status(500).json({ error: "Supabase not configured" });
+  
+  const { name, email, password } = req.body;
+  
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  const { data, error } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: {
+      name,
+      role: 'JURY'
+    }
+  });
+
+  if (error) return res.status(400).json({ error: error.message });
+  
+  res.json({ success: true, user: data.user });
 });
 
 async function startServer() {

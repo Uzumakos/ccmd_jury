@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Shell from '@/components/layout/Shell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { 
   FileText, 
@@ -125,11 +126,32 @@ export default function JuryDashboard() {
                    </CardContent>
 
                    <CardFooter className="pt-4 gap-4 relative">
-                      <Button variant="outline" className="flex-1 h-11 border-[#27272a] bg-transparent text-[#a1a1aa] hover:bg-[#27272a] hover:text-[#fafafa] font-bold uppercase text-[10px] tracking-widest transition-all">
-                        Dossier PDF
-                      </Button>
+                      {group.pdf_storage_path ? (
+                        <Dialog>
+                          <DialogTrigger render={
+                            <Button variant="outline" className="flex-1 h-11 border-[#27272a] bg-transparent text-[#a1a1aa] hover:bg-[#27272a] hover:text-[#fafafa] font-bold uppercase text-[10px] tracking-widest transition-all" />
+                          }>
+                            Dossier PDF
+                          </DialogTrigger>
+                          <DialogContent className="max-w-5xl sm:max-w-5xl md:max-w-6xl w-[95vw] h-[85vh] flex flex-col bg-[#18181b] border-[#27272a] p-0 overflow-hidden">
+                            <DialogHeader className="p-4 border-b border-[#27272a] bg-[#09090b]">
+                              <DialogTitle className="text-[#fafafa]">Document: {group.project_title}</DialogTitle>
+                            </DialogHeader>
+                            <div className="flex-1 w-full bg-[#27272a]">
+                              <iframe 
+                                src={supabase.storage.from('ccmd_documents').getPublicUrl(group.pdf_storage_path).data.publicUrl} 
+                                className="w-full h-full border-0"
+                                title={`PDF ${group.name}`}
+                              />
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      ) : (
+                        <Button variant="outline" disabled className="flex-1 h-11 border-[#27272a] bg-transparent text-[#52525b] font-bold uppercase text-[10px] tracking-widest">
+                          Aucun PDF
+                        </Button>
+                      )}
                       <Button 
-                        disabled={isSubmitted}
                         className="flex-1 h-11 bg-primary text-[#09090b] shadow-[0_0_20px_rgba(56,189,248,0.15)] hover:shadow-[0_0_25px_rgba(56,189,248,0.3)] hover:bg-[#38bdf8ee] font-bold uppercase text-[10px] tracking-widest transition-all rounded-md"
                         onClick={() => navigate(`/jury/evaluer/${group.id}`)}
                       >

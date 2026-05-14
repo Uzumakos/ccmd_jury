@@ -24,6 +24,7 @@ type NavItem = {
 
 const adminItems: NavItem[] = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
+  { label: 'Dashboard Jury', icon: LayoutDashboard, path: '/jury' },
   { label: 'Groupes', icon: Layers, path: '/admin/groups' },
   { label: 'Jurys', icon: UserCircle, path: '/admin/jurys' },
   { label: 'Classement', icon: Trophy, path: '/classement' },

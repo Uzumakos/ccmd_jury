@@ -75,6 +75,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 { 
                   id: userId, 
                   name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+                  email: user.email,
                   role: (user.user_metadata?.role as UserRole) || 'JURY' 
                 }
               ])

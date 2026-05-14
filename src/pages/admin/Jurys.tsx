@@ -4,26 +4,71 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Plus, UserPlus, Trash2, Mail, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Profile } from '@/types';
 import { toast } from 'sonner';
+import { generateJuryCredentials } from '@/lib/utils';
 
 export default function Jurys() {
   const [jurys, setJurys] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortField, setSortField] = useState<'name' | 'email' | 'status'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  
+  const [open, setOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     fetchJurys();
   }, []);
 
   const fetchJurys = async () => {
-    const { data } = await supabase.from('ccmd_profiles').select('*').eq('role', 'JURY');
+    const { data } = await supabase.from('ccmd_profiles').select('*').in('role', ['JURY', 'ADMIN']);
     if (data) setJurys(data);
     setLoading(false);
+  };
+
+  const handleAddJury = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (jurys.length >= 10) {
+      toast.error('Nombre maximum de jurys atteint.');
+      return;
+    }
+
+    if (!newName.trim()) {
+      toast.error('Veuillez renseigner le nom du jury.');
+      return;
+    }
+    
+    const { email, password } = generateJuryCredentials(newName);
+
+    setIsAdding(true);
+    try {
+      const response = await fetch('/api/admin/jurys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName, email, password })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erreur lors de la création du jury');
+      }
+
+      toast.success('Jury ajouté avec succès');
+      setOpen(false);
+      setNewName('');
+      fetchJurys();
+    } catch (error: any) {
+      console.error('Error adding jury:', error);
+      toast.error(error.message);
+    } finally {
+      setIsAdding(false);
+    }
   };
 
   const sortedJurys = useMemo(() => {
@@ -85,9 +130,37 @@ export default function Jurys() {
             <p className="text-gray-500 italic">Consultez et gérez les membres du jury.</p>
           </div>
           
-          <Button disabled={jurys.length >= 10} className="rounded-xl h-11 px-6 font-bold bg-primary shadow-lg hover:bg-primary/90">
-            <Plus className="mr-2 h-5 w-5" /> Nouveau jury
-          </Button>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger render={
+              <Button disabled={jurys.length >= 10} className="rounded-xl h-11 px-6 font-bold bg-primary shadow-lg hover:bg-primary/90" />
+            }>
+              <Plus className="mr-2 h-5 w-5" /> Nouveau jury
+            </DialogTrigger>
+            <DialogContent className="glass border-white/40">
+              <DialogHeader>
+                <DialogTitle>Ajouter un jury</DialogTitle>
+                <DialogDescription>Renseignez les informations pour créer un compte membre du jury.</DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleAddJury} className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-bold">Nom du jury</label>
+                  <Input 
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="ex: Jean Dupont" 
+                    className="bg-white/50" 
+                    required
+                  />
+                  <p className="text-[10px] text-gray-500 italic mt-1">Le jury utilisera uniquement ce nom pour se connecter.</p>
+                </div>
+                <DialogFooter className="pt-4">
+                   <Button type="submit" disabled={isAdding} className="w-full h-12 rounded-xl font-bold">
+                     {isAdding ? 'Création en cours...' : 'Créer le compte'}
+                   </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
         </header>
 
         <Card className="glass border-none shadow-2xl overflow-hidden">
@@ -141,13 +214,15 @@ export default function Jurys() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right px-8">
-                       <Button 
-                        onClick={() => handleDeleteJury(jury.id)}
-                        variant="ghost" 
-                        className="h-8 w-8 p-0 rounded-lg text-red-500 hover:bg-red-50"
-                      >
-                         <Trash2 size={18} />
-                       </Button>
+                       {jury.role !== 'ADMIN' && (
+                         <Button 
+                          onClick={() => handleDeleteJury(jury.id)}
+                          variant="ghost" 
+                          className="h-8 w-8 p-0 rounded-lg text-red-500 hover:bg-red-50"
+                        >
+                           <Trash2 size={18} />
+                         </Button>
+                       )}
                     </TableCell>
                   </TableRow>
                 ))}

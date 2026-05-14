@@ -35,27 +35,50 @@ export default function EvaluationForm() {
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isEvalSubmitted, setIsEvalSubmitted] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
   useEffect(() => {
     async function fetchData() {
       if (!groupId) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-      const [groupRes, membersRes, criteriaRes] = await Promise.all([
+      const [groupRes, membersRes, criteriaRes, evalRes] = await Promise.all([
         supabase.from('ccmd_groups').select('*').eq('id', groupId).single(),
         supabase.from('ccmd_members').select('*').eq('group_id', groupId).order('order'),
-        supabase.from('ccmd_criteria').select('*').order('order')
+        supabase.from('ccmd_criteria').select('*').order('order'),
+        supabase.from('ccmd_evaluations').select('*').eq('group_id', groupId).eq('jury_id', user.id).maybeSingle()
       ]);
 
       if (groupRes.data) setGroup(groupRes.data);
       if (membersRes.data) setMembers(membersRes.data);
+      
+      const initialScores: Record<string, number> = {};
+      const initialBonuses: Record<string, { points: number, reason: string }> = {};
+
       if (criteriaRes.data) {
         setCriteria(criteriaRes.data);
-        // Initialize scores
-        const initialScores: Record<string, number> = {};
         criteriaRes.data.forEach(c => initialScores[c.id] = 0);
-        setScores(initialScores);
       }
+
+      const existingEval = evalRes.data;
+      if (existingEval) {
+         if (existingEval.submitted) setIsEvalSubmitted(true);
+         setComment(existingEval.comment || '');
+         if (existingEval.updated_at) setLastSaved(new Date(existingEval.updated_at));
+
+         const [critScores, memPoints] = await Promise.all([
+            supabase.from('ccmd_criterion_scores').select('*').eq('evaluation_id', existingEval.id),
+            supabase.from('ccmd_member_points').select('*').eq('evaluation_id', existingEval.id)
+         ]);
+
+         critScores.data?.forEach(s => initialScores[s.criterion_id] = s.score);
+         memPoints.data?.forEach(m => initialBonuses[m.member_id] = { points: m.points, reason: m.reason || '' });
+      }
+
+      setScores(initialScores);
+      setBonusPoints(initialBonuses);
     }
     fetchData();
   }, [groupId]);
@@ -82,27 +105,71 @@ export default function EvaluationForm() {
     }));
   };
 
-  const saveDraft = async (silent = false) => {
-    if (!silent) setIsSaving(true);
-    // Real Supabase save logic would go here
-    // For now we simulate success
-    setTimeout(() => {
-      if (!silent) {
-        toast.success("Brouillon sauvegardé");
-        setIsSaving(false);
-      }
-      setLastSaved(new Date());
-    }, 500);
-  };
+  const saveEvaluation = async (isSubmit = false) => {
+    if (isSubmit) setIsSubmitting(true);
+    else setIsSaving(true);
+    
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !groupId) throw new Error("Erreur d'authentification");
 
-  const handleSubmit = async () => {
-    setIsSubmitting(true);
-    // Simulation of final submission
-    setTimeout(() => {
-      toast.success("Évaluation soumise avec succès");
-      setIsSubmitting(false);
-      navigate('/jury');
-    }, 1500);
+      // 1. Upsert Evaluation
+      const { data: evalData, error: evalErr } = await supabase
+        .from('ccmd_evaluations')
+        .upsert({
+          jury_id: user.id,
+          group_id: groupId,
+          total_score: finalTotal,
+          comment: comment,
+          submitted: isSubmit,
+          locked: false,
+          updated_at: new Date().toISOString(),
+          ...(isSubmit ? { submitted_at: new Date().toISOString() } : {})
+        }, { onConflict: 'jury_id, group_id' })
+        .select()
+        .single();
+
+      if (evalErr) throw evalErr;
+
+      // 2. Upsert Criterion Scores
+      const critScoreUpserts = Object.entries(scores).map(([critId, score]) => ({
+         evaluation_id: evalData.id,
+         criterion_id: critId,
+         score: score
+      }));
+      if (critScoreUpserts.length > 0) {
+         const { error } = await supabase.from('ccmd_criterion_scores')
+           .upsert(critScoreUpserts, { onConflict: 'evaluation_id, criterion_id' });
+         if (error) throw error;
+      }
+
+      // 3. Upsert Member Points
+      const memberPointUpserts = Object.entries(bonusPoints).map(([memId, bonus]: [string, any]) => ({
+         evaluation_id: evalData.id,
+         member_id: memId,
+         points: bonus.points,
+         reason: bonus.reason
+      }));
+      if (memberPointUpserts.length > 0) {
+         const { error } = await supabase.from('ccmd_member_points')
+           .upsert(memberPointUpserts, { onConflict: 'evaluation_id, member_id' });
+         if (error) throw error;
+      }
+
+      setLastSaved(new Date());
+      if (isSubmit) {
+        toast.success("Évaluation soumise avec succès");
+        navigate('/jury');
+      } else {
+        toast.success("Brouillon sauvegardé");
+      }
+    } catch (err: any) {
+       console.error("Save error:", err);
+       toast.error(err.message || "Une erreur est survenue");
+    } finally {
+       setIsSaving(false);
+       setIsSubmitting(false);
+    }
   };
 
   if (!group) return null;
@@ -125,12 +192,12 @@ export default function EvaluationForm() {
              )}
              <Button 
                 variant="outline" 
-                onClick={() => saveDraft()} 
-                disabled={isSaving} 
+                onClick={() => saveEvaluation(false)} 
+                disabled={isSaving || isSubmitting || isEvalSubmitted} 
                 className="h-10 border-[#27272a] bg-transparent text-[#a1a1aa] hover:bg-[#27272a] hover:text-[#fafafa] font-bold uppercase text-[10px] tracking-widest transition-all"
              >
                 <Save className="h-4 w-4 mr-2" />
-                {isSaving ? 'Synchronisation...' : 'Enregistrer brouillon'}
+                {isSaving ? 'Enregistrement...' : isEvalSubmitted ? 'Brouillon Verrouillé' : 'Enregistrer brouillon'}
              </Button>
           </div>
         </div>
@@ -183,6 +250,7 @@ export default function EvaluationForm() {
                                  className="w-20 h-12 text-center text-xl font-bold text-[#38bdf8] bg-[#09090b] border-[#27272a] rounded-xl focus:border-[#38bdf8] transition-colors"
                                  value={scores[c.id]}
                                  onChange={(e) => handleScoreChange(c.id, parseInt(e.target.value) || 0)}
+                                 disabled={isEvalSubmitted}
                                  max={20}
                                  min={0}
                                />
@@ -238,6 +306,7 @@ export default function EvaluationForm() {
                                     className="w-16 h-10 text-center font-bold text-sm bg-[#09090b] border-[#27272a] text-[#fafafa] focus:border-[#38bdf8]"
                                     value={bonusPoints[member.id]?.points || 0}
                                     onChange={(e) => handleBonusChange(member.id, parseInt(e.target.value) || 0)}
+                                    disabled={isEvalSubmitted}
                                     max={10}
                                     min={0}
                                   />
@@ -249,6 +318,7 @@ export default function EvaluationForm() {
                                className="bg-transparent border-dashed border-[#27272a] h-10 text-xs italic text-[#a1a1aa] focus:border-[#38bdf8] focus:border-solid transition-all"
                                value={bonusPoints[member.id]?.reason || ''}
                                onChange={(e) => handleReasonChange(member.id, e.target.value)}
+                               disabled={isEvalSubmitted}
                              />
                           </div>
                        </CardContent>
@@ -267,9 +337,10 @@ export default function EvaluationForm() {
                    <CardContent className="p-8">
                       <Textarea 
                         placeholder="Quels sont les points forts et les axes d'amélioration identifiés lors de la présentation orale ?"
-                        className="min-h-[180px] bg-transparent border-none text-[#fafafa] placeholder-[#3f3f46] resize-none focus-visible:ring-0 text-lg leading-relaxed italic"
+                        className="min-h-[180px] bg-transparent border-none text-[#fafafa] placeholder-[#3f3f46] resize-none focus-visible:ring-0 text-lg leading-relaxed italic disabled:opacity-70"
                         value={comment}
                         onChange={(e) => setComment(e.target.value)}
+                        disabled={isEvalSubmitted}
                         maxLength={500}
                       />
                    </CardContent>
@@ -308,12 +379,12 @@ export default function EvaluationForm() {
 
                     <div className="space-y-6 pt-4">
                        <Button 
-                         className="w-full h-16 text-lg font-black bg-primary text-[#09090b] shadow-[0_0_30px_rgba(56,189,248,0.2)] hover:shadow-[0_0_40px_rgba(56,189,248,0.35)] transition-all uppercase tracking-[0.1em] rounded-xl group"
-                         onClick={handleSubmit}
-                         disabled={isSubmitting}
+                         className="w-full h-auto min-h-[4rem] py-3 px-2 flex items-center justify-center flex-wrap text-sm sm:text-base font-black bg-primary text-[#09090b] shadow-[0_0_30px_rgba(56,189,248,0.2)] hover:shadow-[0_0_40px_rgba(56,189,248,0.35)] transition-all uppercase tracking-[0.1em] rounded-xl group"
+                         onClick={() => saveEvaluation(true)}
+                         disabled={isSubmitting || isSaving || isEvalSubmitted}
                        >
-                          {isSubmitting ? 'Validation...' : 'Sceller le Verdict'}
-                          <Send className="ml-3 h-5 w-5 transform group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                          <span className="text-center">{isSubmitting ? 'Validation...' : isEvalSubmitted ? 'Évaluation Transmise' : 'Sceller le Verdict'}</span>
+                          <Send className="ml-2 h-5 w-5 shrink-0 transform group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
                        </Button>
                        <div className="flex gap-3 px-2">
                           <div className="w-1 bg-[#3f3f46] h-full rounded-full"></div>
